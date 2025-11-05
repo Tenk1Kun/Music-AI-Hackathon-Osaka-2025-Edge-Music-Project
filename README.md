@@ -13,7 +13,7 @@
 
 ---
 
-## 🧠 What this project does
+## What this project does
 
 This system turns architectural form into a clear, monophonic musical line:
 
@@ -31,7 +31,7 @@ This system turns architectural form into a clear, monophonic musical line:
 
 ---
 
-## 🖼️ Example Output
+## Example Output
 
 <div align="center">
   <img src="./screenshotmusicai.png" width="800" alt="Demo screenshot"/><br/>
@@ -40,7 +40,7 @@ This system turns architectural form into a clear, monophonic musical line:
 
 ---
 
-## 🧩 How It Works — Script Walkthrough
+## Script Walkthrough of How It Works
 
 Follow the “script” below to understand the full pipeline. Each step mirrors a real module in the repo.
 
@@ -184,9 +184,9 @@ export async function playEventsAtOnsets(events, style: "Japanese" | "Austrian",
 ```
 Style presets:
 
-Japanese → koto • ~100 BPM • pentatonic
+Japanese → koto, ~100 BPM, Japanese pentatonic scale (hirajoshi)
 
-Austrian → piano • ~90 BPM • harmonic/minor palette
+Austrian → piano, ~90 BPM, harmonic/minor palette
 
 ### 5) Page wiring (where it all connects)
 
@@ -205,13 +205,13 @@ await playEventsAtOnsets(events, isJapanese ? "Japanese" : "Austrian", { bpm: is
 ```
 
 
-## ✨ Why This Matters
+## Summary
 
 - Cultural architecture features → musical language  
 - Edge geometry as gesture  
 - Real-time browser audio AI, zero backend  
 - Human-centered sonification  
-- Built in 24 hours at an international hackathon — the only high-school competitor among adults.
+- Built in 24 hours at an international hackathon 
 
 ---
 

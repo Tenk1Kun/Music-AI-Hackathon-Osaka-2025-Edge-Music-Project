@@ -1,249 +1,160 @@
-<!-- Improved compatibility of back to top link -->
-<a id="readme-top"></a>
+// app/ArchitectureMusicDemo.tsx
+// Orchestration layer: upload → classify → edges → events → play/stop
+// Assumes these utils exist per your repo:
+//   util/preprocessImage.ts   -> preprocessImage(file: File): Promise<tf.Tensor4D>
+//   util/loadModel.ts         -> loadModel(): Promise<tf.LayersModel>
+//   util/cannyConverter.ts    -> extractEdges(cv, imgCanvas, edgeCanvas): Array<[x,y,mag?]>
+//   util/edgeToEvents.ts      -> edgePointsToEvents(points, opts): Event[]
+//   util/toneUtil.ts          -> initAudio(style: "japan" | "austria"), playEvents(events), stopMusic()
 
-<!-- PROJECT SHIELDS -->
-[![Contributors][contributors-shield]][contributors-url]
-[![Forks][forks-shield]][forks-url]
-[![Stargazers][stars-shield]][stars-url]
-[![Issues][issues-shield]][issues-url]
-[![MIT License][license-shield]][license-url]
-[![LinkedIn][linkedin-shield]][linkedin-url]
+"use client";
 
-<!-- PROJECT LOGO -->
-<br />
-<div align="center">
-  <a href="#">
-    <img src="images/logo.png" alt="Logo" width="100" height="100">
-  </a>
+import React, { useCallback, useMemo, useRef, useState } from "react";
+import * as tf from "@tensorflow/tfjs";
+import { preprocessImage } from "@/util/preprocessImage";
+import { loadModel } from "@/util/loadModel";
+import { extractEdges } from "@/util/cannyConverter";
+import { edgePointsToEvents } from "@/util/edgeToEvents";
+import { initAudio, playEvents, stopMusic } from "@/util/toneUtil";
 
-  <h3 align="center">Architecture → Music Generator</h3>
+// Optional: tiny helpers for musical scales (guards if your util already has it)
+const KUMOI = ["C4", "D♭4", "F4", "G4", "A♭4", "C5", "D♭5", "F5", "G5", "A♭5"];
+const HARMONIC_MINOR = ["A3", "B3", "C4", "D4", "E4", "F4", "G#4", "A4", "B4", "C5"];
 
-  <p align="center">
-    Turn buildings into music — fully in-browser, AI-enhanced, real-time sonification.
-    <br />
-    <a href="https://hackathon-2025-edge-music.vercel.app/"><strong>View Demo »</strong></a>
-    <br />
-    <br />
-    <a href="https://hackathon-2025-edge-music.vercel.app/">Live App</a>
-    ·
-    <a href="https://github.com/Tenk1Kun/Music-AI-Hackathon-Osaka-2025-Music-Project/issues/new?labels=bug&template=bug-report.md">Report Bug</a>
-    ·
-    <a href="https://github.com/Tenk1Kun/Music-AI-Hackathon-Osaka-2025-Music-Project/issues/new?labels=enhancement&template=feature-request.md">Request Feature</a>
-  </p>
-</div>
+type StyleCfg = {
+  style: "japan" | "austria";
+  scale: string[];
+  bpm: number;
+  instrument: "koto" | "piano";
+};
 
----
+function chooseStyleFromProbs(japanProb: number, austriaProb: number): StyleCfg {
+  if (japanProb >= austriaProb) {
+    return { style: "japan", scale: KUMOI, bpm: 100, instrument: "koto" };
+    // If you expose instrument choice in toneUtil, pass it along; otherwise bpm/style is enough.
+  }
+  return { style: "austria", scale: HARMONIC_MINOR, bpm: 90, instrument: "piano" };
+}
 
-<!-- TABLE OF CONTENTS -->
-<details>
-  <summary>📑 Table of Contents</summary>
-  <ol>
-    <li>
-      <a href="#about-the-project">About The Project</a>
-      <ul>
-        <li><a href="#how-it-works">How It Works</a></li>
-        <li><a href="#built-with">Built With</a></li>
-      </ul>
-    </li>
-    <li>
-      <a href="#getting-started">Getting Started</a>
-      <ul>
-        <li><a href="#prerequisites">Prerequisites</a></li>
-        <li><a href="#installation">Installation</a></li>
-      </ul>
-    </li>
-    <li><a href="#usage">Usage</a></li>
-    <li><a href="#roadmap">Roadmap</a></li>
-    <li><a href="#contributing">Contributing</a></li>
-    <li><a href="#license">License</a></li>
-    <li><a href="#contact">Contact</a></li>
-    <li><a href="#acknowledgments">Acknowledgments</a></li>
-  </ol>
-</details>
+export default function ArchitectureMusicDemo() {
+  const [loading, setLoading] = useState(false);
+  const [styleCfg, setStyleCfg] = useState<StyleCfg | null>(null);
+  const [probs, setProbs] = useState<{ japan: number; austria: number } | null>(null);
+  const [eventsCount, setEventsCount] = useState<number>(0);
+  const [status, setStatus] = useState<string>("Idle");
+  const [error, setError] = useState<string | null>(null);
 
----
+  // Canvases: original image and edges
+  const imgCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const edgeCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const imgElRef = useRef<HTMLImageElement | null>(null);
 
-## 🎵 About The Project
+  // Cache TF model
+  const modelPromise = useMemo(() => loadModel(), []);
 
-[![Product Screenshot][product-screenshot]](https://hackathon-2025-edge-music.vercel.app/)
+  // Load a file into the image canvas
+  const drawImageToCanvas = useCallback(async (file: File) => {
+    const img = new Image();
+    imgElRef.current = img;
 
-Convert architecture into music — **directly in your browser**, no backend, no data sent anywhere.
+    const url = URL.createObjectURL(file);
+    img.src = url;
 
-🧠 **AI Style Classifier:** Japan vs Austria  
-🏛️ **Vision Processing:** Canny + Sobel  
-🎹 **Music Engine:** Tone.js, scale-snapped melodies  
-⚡ **Real-time:** Zero server, instant inference  
-🔒 **Privacy:** Image never leaves device  
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = (e) => reject(e);
+    });
 
-> “Buildings are frozen music — this app lets them play.”
+    const w = img.naturalWidth;
+    const h = img.naturalHeight;
+    const maxSide = 1024; // limit for speed; adjust as desired
+    const scale = Math.min(1, maxSide / Math.max(w, h));
+    const W = Math.max(1, Math.floor(w * scale));
+    const H = Math.max(1, Math.floor(h * scale));
 
-### 🧠 How It Works
+    const c = imgCanvasRef.current!;
+    c.width = W;
+    c.height = H;
+    const ctx = c.getContext("2d")!;
+    ctx.clearRect(0, 0, W, H);
+    ctx.drawImage(img, 0, 0, W, H);
 
-| Step | Action |
-|------|-------|
-1 | Upload building image  
-2 | TF-JS model classifies architectural style  
-3 | OpenCV extracts edges + gradient magnitude  
-4 | Horizontal band slicing → melodic lines  
-5 | y → pitch · x → timing · mag → velocity  
-6 | Tone.js renders real-time sound  
+    // match edge canvas size
+    const e = edgeCanvasRef.current!;
+    e.width = W;
+    e.height = H;
 
-### Music Mapping Rules
+    URL.revokeObjectURL(url);
+    return { W, H };
+  }, []);
 
-| Visual Feature | Musical Meaning |
-|---|---|
-Vertical position (y) | Pitch (height → higher notes)  
-Horizontal (x) | Time (left to right → rhythm)  
-Gradient magnitude | Velocity (louder if edges strong)  
-Architecture style | Scale, tempo, instrument  
+  const onFile = useCallback(
+    async (file?: File) => {
+      if (!file) return;
+      setError(null);
+      setStatus("Loading image…");
+      setLoading(true);
+      try {
+        // 1) Draw image into canvas (resized)
+        const { W, H } = await drawImageToCanvas(file);
 
-Style behaviors:
-- **Japan → Kumoi scale, ~100 BPM, Koto**
-- **Austria → Harmonic minor, ~90 BPM, Piano**
+        // 2) Classify style (TF.js)
+        setStatus("Classifying style (TF.js)...");
+        const model = await modelPromise;
+        const tensor = await preprocessImage(file); // returns shape [1,224,224,3]
+        const logits = model.predict(tensor) as tf.Tensor;
+        const probs = await logits.data();
+        tensor.dispose();
+        if ((logits as any).dispose) (logits as any).dispose();
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+        const japanProb = probs[0] ?? 0.5;
+        const austriaProb = probs[1] ?? 0.5;
+        setProbs({ japan: japanProb, austria: austriaProb });
+        const cfg = chooseStyleFromProbs(japanProb, austriaProb);
+        setStyleCfg(cfg);
 
----
+        // 3) Extract edges (OpenCV.js). Assumes global "cv" is loaded in _app or layout.
+        setStatus("Extracting edges (OpenCV.js)...");
+        const points = extractEdges(
+          // @ts-ignore - cv comes from OpenCV.js script in page head, e.g. <script src="/opencv.js"></script>
+          (window as any).cv,
+          imgCanvasRef.current!,
+          edgeCanvasRef.current!
+        );
 
-## 🛠 Built With
+        // 4) Convert edge points → events (band slicing + thinning + snapping)
+        setStatus("Mapping edges to musical events…");
+        const events = edgePointsToEvents(points, {
+          bands: 12,
+          scale: cfg.scale,
+          imageWidth: W,
+          imageHeight: H,
+          quant: "16n",
+        });
 
-* [![Next][Next.js]][Next-url]
-* [![React][React.js]][React-url]
-* TensorFlow.js
-* OpenCV.js (WASM)
-* Tone.js (WebAudio)
-* TypeScript
+        // 5) Init audio + schedule
+        setStatus(`Init audio (${cfg.style}) and scheduling…`);
+        await initAudio(cfg.style);
+        setEventsCount(events.length);
+        playEvents(events);
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+        setStatus(`Playing ${events.length} events @ ${cfg.bpm} BPM (${cfg.instrument})`);
+      } catch (e: any) {
+        console.error(e);
+        setError(e?.message ?? "Unknown error");
+        setStatus("Error");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [drawImageToCanvas, modelPromise]
+  );
 
----
+  const onStop = useCallback(() => {
+    stopMusic();
+    setStatus("Stopped");
+  }, []);
 
-## 🚀 Getting Started
-
-To run locally, follow these steps:
-
-### ✅ Prerequisites
-
-* Node >= 18
-```sh
-npm install -g pnpm
-📦 Installation
-sh
-Copy code
-git clone https://github.com/Tenk1Kun/Music-AI-Hackathon-Osaka-2025-Music-Project.git
-cd Music-AI-Hackathon-Osaka-2025-Music-Project
-pnpm install
-pnpm dev
-Then open:
-
-arduino
-Copy code
-http://localhost:3000
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
-🎧 Usage
-Upload architecture photo
-
-Click Generate Edges
-
-Press Play to hear the structure
-
-Example vision snippet:
-
-ts
-Copy code
-cv.cvtColor(src, src, cv.COLOR_RGBA2GRAY)
-cv.GaussianBlur(src, src, new cv.Size(5,5), 0)
-cv.Canny(src, edges, 50, 150)
-Mapping pitch:
-
-ts
-Copy code
-const pitch = mapYToScale(yNormalized, scale)
-Tone.js scheduling:
-
-ts
-Copy code
-Tone.Transport.schedule(time => {
-  synth.triggerAttackRelease(note, dur, time, velocity)
-}, onset)
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
-🗺️ Roadmap
- Live camera mode
-
- Multi-voice counterpoint
-
- CLIP embeddings for timbre morph
-
- Rhythm from symmetry detection
-
- Breath phrasing / humanization
-
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
-🤝 Contributing
-Contributions make open source amazing!
-
-Fork repo
-
-git checkout -b feature/MyFeature
-
-git commit -m "Add cool feature"
-
-git push origin feature/MyFeature
-
-Submit PR 🚀
-
-Top Contributors
-<a href="https://github.com/Tenk1Kun/Music-AI-Hackathon-Osaka-2025-Music-Project/graphs/contributors"> <img src="https://contrib.rocks/image?repo=Tenk1Kun/Music-AI-Hackathon-Osaka-2025-Music-Project" /> </a> <p align="right">(<a href="#readme-top">back to top</a>)</p>
-📄 License
-Distributed under the MIT License.
-
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
-📫 Contact
-Creator: Koya Takemura
-Web Demo: https://hackathon-2025-edge-music.vercel.app/
-GitHub: https://github.com/Tenk1Kun
-
-Project Link:
-https://github.com/Tenk1Kun/Music-AI-Hackathon-Osaka-2025-Music-Project
-
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
-🙏 Acknowledgments
-TensorFlow.js
-
-OpenCV.js WASM
-
-Tone.js community
-
-Vercel
-
-"Architecture is frozen music" — Goethe/Kandinsky orbit
-
-Inspiration: Human-centered audio-AI + sonification research
-
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
-<!-- MARKDOWN LINKS & IMAGES -->
-markdown
-Copy code
-
----
-
-## ✅ Want me to also generate?
-
-Reply with any:
-
-- `BLANK_README.md` version
-- `CONTRIBUTING.md`
-- `FEATURE REQUEST issue template`
-- `BUG REPORT issue template`
-- `ARCHITECTURE.md` (with system diagrams)
-- PNG banner for repo
-- GIF demo capture script
-
-Just tell me:
-
-Make ARCHITECTURE.md + banner + GIF template
-
-css
-Copy code
-
-…and I’ll deliver.
+  return (
+    <div className="flex flex-col gap-4 p-6 max-w-5xl mx-auto">
+      <header className="flex items-center justify-between">

@@ -254,7 +254,7 @@ await playEventsAtOnsets(events, isJapanese ? "Japanese" : "Austrian", { bpm: is
 - Primary author of: `edgeToEvents.ts` (band mapping, scale logic, scheduling interfaces)  
 - Integration: end-to-end musical mapping & playback
 
-**Jana — last name TBA**  
+**Jana**  
 - Designed the **SurroundSound** logo
 
 **Steffi**  

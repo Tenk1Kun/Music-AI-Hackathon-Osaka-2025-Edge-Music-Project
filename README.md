@@ -1,160 +1,162 @@
-// app/ArchitectureMusicDemo.tsx
-// Orchestration layer: upload → classify → edges → events → play/stop
-// Assumes these utils exist per your repo:
-//   util/preprocessImage.ts   -> preprocessImage(file: File): Promise<tf.Tensor4D>
-//   util/loadModel.ts         -> loadModel(): Promise<tf.LayersModel>
-//   util/cannyConverter.ts    -> extractEdges(cv, imgCanvas, edgeCanvas): Array<[x,y,mag?]>
-//   util/edgeToEvents.ts      -> edgePointsToEvents(points, opts): Event[]
-//   util/toneUtil.ts          -> initAudio(style: "japan" | "austria"), playEvents(events), stopMusic()
+Edge-To-Music AI
+<img src="https://upload.wikimedia.org/wikipedia/commons/thumb/2/23/Sinus_3d.gif/120px-Sinus_3d.gif" width="120" align="right">
 
-"use client";
+Edge-To-Music AI turns building geometry into sound.
+Upload architecture → detect structural edges → convert lines into musical events → hear form become melody.
 
-import React, { useCallback, useMemo, useRef, useState } from "react";
-import * as tf from "@tensorflow/tfjs";
-import { preprocessImage } from "@/util/preprocessImage";
-import { loadModel } from "@/util/loadModel";
-import { extractEdges } from "@/util/cannyConverter";
-import { edgePointsToEvents } from "@/util/edgeToEvents";
-import { initAudio, playEvents, stopMusic } from "@/util/toneUtil";
+Where architecture becomes score, and structure becomes rhythm.
 
-// Optional: tiny helpers for musical scales (guards if your util already has it)
-const KUMOI = ["C4", "D♭4", "F4", "G4", "A♭4", "C5", "D♭5", "F5", "G5", "A♭5"];
-const HARMONIC_MINOR = ["A3", "B3", "C4", "D4", "E4", "F4", "G#4", "A4", "B4", "C5"];
+Spatial → musical mapping (edges → notes, angles → timing)
 
-type StyleCfg = {
-  style: "japan" | "austria";
-  scale: string[];
-  bpm: number;
-  instrument: "koto" | "piano";
-};
+Real-time web inference (TensorFlow.js + WebAssembly OpenCV)
 
-function chooseStyleFromProbs(japanProb: number, austriaProb: number): StyleCfg {
-  if (japanProb >= austriaProb) {
-    return { style: "japan", scale: KUMOI, bpm: 100, instrument: "koto" };
-    // If you expose instrument choice in toneUtil, pass it along; otherwise bpm/style is enough.
-  }
-  return { style: "austria", scale: HARMONIC_MINOR, bpm: 90, instrument: "piano" };
-}
+Tone.js synthesis engine with transport scheduling
 
-export default function ArchitectureMusicDemo() {
-  const [loading, setLoading] = useState(false);
-  const [styleCfg, setStyleCfg] = useState<StyleCfg | null>(null);
-  const [probs, setProbs] = useState<{ japan: number; austria: number } | null>(null);
-  const [eventsCount, setEventsCount] = useState<number>(0);
-  const [status, setStatus] = useState<string>("Idle");
-  const [error, setError] = useState<string | null>(null);
+Deterministic + expressive: lines produce repeatable music, but phrasing adapts
 
-  // Canvases: original image and edges
-  const imgCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const edgeCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const imgElRef = useRef<HTMLImageElement | null>(null);
+Works entirely in the browser — privacy-safe, zero backend
 
-  // Cache TF model
-  const modelPromise = useMemo(() => loadModel(), []);
+“Architecture is frozen music. This project melts it back into sound.”
 
-  // Load a file into the image canvas
-  const drawImageToCanvas = useCallback(async (file: File) => {
-    const img = new Image();
-    imgElRef.current = img;
+<p align="center"> <a href="https://hackathon-2025-edge-music.vercel.app/"><b>Live Demo</b></a> </p> <p align="center"> <img src="https://i.imgur.com/RcSv8ie.jpeg" alt="Demo screenshot" width="700"> </p>
+🎧 What This Does
 
-    const url = URL.createObjectURL(file);
-    img.src = url;
+You upload a building image — temple, museum, tower, street.
+The system:
 
-    await new Promise<void>((resolve, reject) => {
-      img.onload = () => resolve();
-      img.onerror = (e) => reject(e);
-    });
+detects edges
 
-    const w = img.naturalWidth;
-    const h = img.naturalHeight;
-    const maxSide = 1024; // limit for speed; adjust as desired
-    const scale = Math.min(1, maxSide / Math.max(w, h));
-    const W = Math.max(1, Math.floor(w * scale));
-    const H = Math.max(1, Math.floor(h * scale));
+finds angle + frequency relationships
 
-    const c = imgCanvasRef.current!;
-    c.width = W;
-    c.height = H;
-    const ctx = c.getContext("2d")!;
-    ctx.clearRect(0, 0, W, H);
-    ctx.drawImage(img, 0, 0, W, H);
+assigns pitch + rhythm based on geometry
 
-    // match edge canvas size
-    const e = edgeCanvasRef.current!;
-    e.width = W;
-    e.height = H;
+plays an emergent melody from the structure itself
 
-    URL.revokeObjectURL(url);
-    return { W, H };
-  }, []);
+The result feels like architectural mood translated into sound — rigid, flowing, symmetrical, fragmented, etc.
 
-  const onFile = useCallback(
-    async (file?: File) => {
-      if (!file) return;
-      setError(null);
-      setStatus("Loading image…");
-      setLoading(true);
-      try {
-        // 1) Draw image into canvas (resized)
-        const { W, H } = await drawImageToCanvas(file);
+🧠 How It Works
+1. Convert photo to edge space
 
-        // 2) Classify style (TF.js)
-        setStatus("Classifying style (TF.js)...");
-        const model = await modelPromise;
-        const tensor = await preprocessImage(file); // returns shape [1,224,224,3]
-        const logits = model.predict(tensor) as tf.Tensor;
-        const probs = await logits.data();
-        tensor.dispose();
-        if ((logits as any).dispose) (logits as any).dispose();
+OpenCV Canny finds structural lines only:
 
-        const japanProb = probs[0] ?? 0.5;
-        const austriaProb = probs[1] ?? 0.5;
-        setProbs({ japan: japanProb, austria: austriaProb });
-        const cfg = chooseStyleFromProbs(japanProb, austriaProb);
-        setStyleCfg(cfg);
+const img = cv.imread(canvas)
+cv.cvtColor(img, img, cv.COLOR_RGBA2GRAY)
+cv.GaussianBlur(img, img, new cv.Size(5,5), 0)
+cv.Canny(img, edges, 50, 150)
 
-        // 3) Extract edges (OpenCV.js). Assumes global "cv" is loaded in _app or layout.
-        setStatus("Extracting edges (OpenCV.js)...");
-        const points = extractEdges(
-          // @ts-ignore - cv comes from OpenCV.js script in page head, e.g. <script src="/opencv.js"></script>
-          (window as any).cv,
-          imgCanvasRef.current!,
-          edgeCanvasRef.current!
-        );
 
-        // 4) Convert edge points → events (band slicing + thinning + snapping)
-        setStatus("Mapping edges to musical events…");
-        const events = edgePointsToEvents(points, {
-          bands: 12,
-          scale: cfg.scale,
-          imageWidth: W,
-          imageHeight: H,
-          quant: "16n",
-        });
+Output → clean edge map, revealing load-bearing form + symmetry.
 
-        // 5) Init audio + schedule
-        setStatus(`Init audio (${cfg.style}) and scheduling…`);
-        await initAudio(cfg.style);
-        setEventsCount(events.length);
-        playEvents(events);
+2. Extract musical event grid
 
-        setStatus(`Playing ${events.length} events @ ${cfg.bpm} BPM (${cfg.instrument})`);
-      } catch (e: any) {
-        console.error(e);
-        setError(e?.message ?? "Unknown error");
-        setStatus("Error");
-      } finally {
-        setLoading(false);
-      }
-    },
-    [drawImageToCanvas, modelPromise]
-  );
+Every detected point becomes a candidate note:
 
-  const onStop = useCallback(() => {
-    stopMusic();
-    setStatus("Stopped");
-  }, []);
+edges.forEach((x, y) => events.push({
+  xNorm: x / width,
+  yNorm: y / height,
+  angle: getAngleGradient(x, y, edges)
+}))
 
-  return (
-    <div className="flex flex-col gap-4 p-6 max-w-5xl mx-auto">
-      <header className="flex items-center justify-between">
+
+We treat the architecture as a score already written.
+
+3. Map geometry → musical parameters
+Architectural feature	Musical translation
+Vertical line	Sustained tone
+Diagonal beam	Ascending/descending gliss
+Horizontal beams	Stable bass tones
+Dense repetition	Trills / arpeggiation
+Symmetry	Polyphonic unison moments
+
+Pitch from verticality:
+
+const pitch = scale[Math.floor((1 - yNorm) * scale.length)]
+
+
+Time from x-coordinate:
+
+const onset = xNorm * totalDuration
+
+
+Angle influences articulation + velocity.
+
+4. Synthesize sound & play transport
+
+Tone.js generative playback:
+
+Tone.Transport.schedule(time => {
+  synth.triggerAttackRelease(pitch, dur, time, velocity)
+}, onset)
+
+
+Each building literally sings its shape.
+
+🌐 Live Demo
+
+Try it here:
+https://hackathon-2025-edge-music.vercel.app/
+
+Upload a building → press Play → listen to architecture.
+
+Works best on:
+
+shrines & temples
+
+brutalist geometry
+
+glass grids & arcs
+
+bridges, towers, arches
+
+🧩 Tech Stack
+Layer	Technology
+Edge detection	WebAssembly OpenCV
+ML routing	TensorFlow.js
+Synthesis	Tone.js
+Frontend	Next.js / React
+Runtime	Vercel / Web Audio API
+🧪 Who This Is For
+
+Computational arts researchers
+
+Music technologists
+
+Creative coders (p5 / WebAudio / Max/MSP crowd)
+
+Hackathon AI builders
+
+Architects curious about sonic form
+
+🗺️ Roadmap
+
+🎥 Live camera → real-time “singing architecture”
+
+🎶 Timbre palette selection (organ / koto / pads / brass)
+
+🧮 CLIP aesthetic embeddings → dynamic emotional tuning
+
+🫁 Breath phrasing + rubato humanization
+
+🏛️ 3D mesh → harmonic space mapping (BIM sonification)
+
+🙏 Acknowledgments
+
+TensorFlow.js
+
+OpenCV WASM build
+
+Tone.js
+
+Vercel
+
+Hackathon community & mentors
+
+homage to Goethe / Kandinsky — and every kid who ever looked at a building and wondered if it had music inside it
+
+📎 Footer
+
+If this inspires you, remix it.
+If you expand it, share the sound.
+
+Architecture has always been music —
+we finally just let it sing.

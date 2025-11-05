@@ -215,7 +215,7 @@ await playEventsAtOnsets(events, isJapanese ? "Japanese" : "Austrian", { bpm: is
 
 ---
 
-## 🛠️ Built With
+## Built With
 
 - **Next.js + TypeScript** — UI & routing  
 - **TensorFlow.js** — style classifier  
@@ -225,19 +225,14 @@ await playEventsAtOnsets(events, isJapanese ? "Japanese" : "Austrian", { bpm: is
 
 ---
 
-## 🎵 Pipeline (ASCII)
+## Pipeline
 
+<div align="center">
+  <img src="./musicpipeline.png" width="750" alt="Music AI Pipeline Diagram"/><br/>
+  <i>Full architecture-to-music conversion pipeline</i>
+</div>
 
-Image → Preprocess → Style Classifier → Edge Detector
-        └──────────────────────────────┐
-Pitch Map ← y-axis              x-axis → Rhythm Grid
-Velocity ← gradient magnitude
-                    ↓
-              Tone.Transport
-                    ↓
-                Audio Output
-
-## 🌍 Who Uses/Studies This
+## Who Uses/Studies This
 
 - Computational creativity researchers  
 - AI-music artists  
@@ -247,7 +242,7 @@ Velocity ← gradient magnitude
 
 ---
 
-## 🙏 Credits
+## Credits
 
 - **Leon Kattendick** — implemented the full **frontend & preprocessing pipeline**, including  
   *`preprocessImage.ts`*, *`loadModel.ts`*, *`cannyConverter.ts`*, and *`page.tsx`* (web visuals and interaction logic).  
@@ -258,7 +253,7 @@ Velocity ← gradient magnitude
 
 ---
 
-## 📄 License
+## License
 
 MIT — free to modify & explore.
 

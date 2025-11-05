@@ -249,8 +249,12 @@ Velocity ← gradient magnitude
 
 ## 🙏 Credits
 
-- **Core dev:** Koya Takemura  
-- **Vision inspiration:** Leon Kattendick — [https://github.com/LeonKattendick/](https://github.com/LeonKattendick/)
+- **Leon Kattendick** — implemented the full **frontend & preprocessing pipeline**, including  
+  *`preprocessImage.ts`*, *`loadModel.ts`*, *`cannyConverter.ts`*, and *`page.tsx`* (web visuals and interaction logic).  
+  Also assisted with *`edgeToEvents.ts`* mapping functions.
+
+- **Koya Takemura** — trained the **AI classification model**, developed the **musical playback system** (*`toneUtil.ts`*),  
+  and primarily authored the **edge-to-events mapping algorithm** (*`edgeToEvents.ts`*).
 
 ---
 
@@ -258,5 +262,4 @@ Velocity ← gradient magnitude
 
 MIT — free to modify & explore.
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
 

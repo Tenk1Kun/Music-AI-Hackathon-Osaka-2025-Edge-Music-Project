@@ -47,7 +47,7 @@ This system turns architectural form into monophonic music:
 ## 🖼️ **Example Output**
 
 <div align="center">
-<img src="./screenshotmusicai.png" width="450"/>
+<img src="./screenshot.png" width="450"/>
 <br/>
 <i>Temple edges → koto line, 96.4% confidence</i>
 </div>

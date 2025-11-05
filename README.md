@@ -47,100 +47,139 @@ Follow the “script” below to understand the full pipeline. Each step mirrors
 ### 1) Load & Normalize (TensorFlow.js)
 
 ```ts
-// loadModel.ts
-import * as tf from '@tensorflow/tfjs';
+// src/util/loadModel.ts
+import * as tf from "@tensorflow/tfjs";
 
-export const model = await tf.loadLayersModel('/model/model.json');
+let model: tf.LayersModel | null = null;
 
-export function preprocess(img: HTMLImageElement | ImageData | HTMLCanvasElement) {
-  // Example: resize → toFloat → /255 → expandDims
-  return tf.tidy(() => {
-    const tensor = tf.browser.fromPixels(img as HTMLCanvasElement)
-      .resizeBilinear([224, 224])
-      .toFloat()
-      .div(255);
-    return tensor.expandDims(0); // [1,224,224,3]
+export const loadKotoModel = async () => {
+  if (!model) {
+    model = await tf.loadLayersModel("/model/model.json");
+  }
+  return model;
+};
+```
+```ts
+// src/util/preprocessImage.ts
+import * as tf from "@tensorflow/tfjs";
+
+export const preprocessImage = async (file: File): Promise<tf.Tensor4D> => {
+  // ... FileReader / Image setup ...
+  const tensor = tf.tidy(() => {
+    const imageTensor = tf.browser.fromPixels(img).toFloat();
+    const resized = tf.image.resizeBilinear(imageTensor, [128, 128]);
+    const normalized = resized.div(255.0);
+    return normalized.expandDims(0) as tf.Tensor4D;
   });
-}
-
-export async function classify(img: HTMLImageElement | ImageData | HTMLCanvasElement) {
-  return tf.tidy(() => model.predict(preprocess(img)) as tf.Tensor);
-}
-
+  return tensor;
+};
 ```
 
 ### 2) Edge Extraction (OpenCV.js / WASM)
 
 ```ts
-// cannyConverter.ts
-// Input: RGBA canvas → Output: edges Mat (CV_8U) and optional gradient magnitude
-export function detectEdges(src: cv.Mat) {
+// src/util/cannyConverter.ts
+export const canny = (cv: any, imageIn: RefObject<HTMLCanvasElement | HTMLImageElement>, imageOut?: RefObject<HTMLCanvasElement>) => {
+  const src = cv.imread(imageIn.current);
   const gray = new cv.Mat();
+  const blurred = new cv.Mat();
   const edges = new cv.Mat();
-  const gradX = new cv.Mat(); const gradY = new cv.Mat(); const mag = new cv.Mat();
+  const gradX = new cv.Mat();
+  const gradY = new cv.Mat();
 
   cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-  cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0);
-  cv.Canny(gray, edges, 50, 150);
+  cv.GaussianBlur(gray, blurred, new cv.Size(5, 1), 0);
+  cv.Canny(blurred, edges, 350, 450, 3);
 
-  // Optional: velocity from gradient magnitude
-  cv.Sobel(gray, gradX, cv.CV_32F, 1, 0);
-  cv.Sobel(gray, gradY, cv.CV_32F, 0, 1);
-  cv.magnitude(gradX, gradY, mag); // CV_32F
+  cv.Sobel(gray, gradX, cv.CV_32F, 1, 0, 3);
+  cv.Sobel(gray, gradY, cv.CV_32F, 0, 1, 3);
 
-  gray.delete(); gradX.delete(); gradY.delete();
-  return { edges, magnitude: mag }; // caller disposes
-}
+  if (imageOut?.current) cv.imshow(imageOut.current, edges);
+
+  const points: { x:number; y:number; mag:number; theta:number }[] = [];
+  for (let y = 0; y < edges.rows; y++) {
+    for (let x = 0; x < edges.cols; x++) {
+      if (edges.ucharPtr(y, x)[0] !== 0) {
+        const gx = gradX.floatAt(y, x);
+        const gy = gradY.floatAt(y, x);
+        points.push({ x, y, mag: Math.hypot(gx, gy), theta: Math.atan2(gy, gx) });
+      }
+    }
+  }
+
+  // ... delete mats ...
+  return points;
+};
 ```
 
 Edges become (x, y, magnitude) points. Magnitude maps to velocity.
 
-### 3) Band Slicing → Monophonic Lane
+### 3) Edges → Events (band/scale mapping)
 
 ```ts
-// edgeToEvents.ts
-// Scan in thin horizontal bands (staff analogy). Thin horizontally to avoid clusters.
-export function edgesToEvents(edges: cv.Mat, magnitude?: cv.Mat, bands = 24) {
-  const W = edges.cols, H = edges.rows;
-  const events: { xNorm: number; yNorm: number; vel: number }[] = [];
+// src/util/edgeToEvents.ts
+export function mapEdgesToEvents(
+  pts, imgW, imgH,
+  { lanes, spanSeconds, scaleRootMidi, scaleIntervals, thinCell = 4, velMin = 0.5, velMax = 0.95, yUpIsHigher = true, pitchCurve = 1.3, octaveShift = -1 }
+) {
+  const taken = new Set<number>();
+  const filtered = pts.filter(p => {
+    const gx = Math.floor(p.x / thinCell);
+    if (taken.has(gx)) return false;
+    taken.add(gx);
+    return true;
+  });
 
-  for (let b = 0; b < bands; b++) {
-    const y0 = Math.floor((b    / bands) * H);
-    const y1 = Math.floor(((b+1)/ bands) * H);
+  const laneH = Math.max(1, Math.floor(imgH / lanes));
+  let maxMag = 1e-6; for (const p of filtered) maxMag = Math.max(maxMag, p.mag ?? 0);
 
-    for (let y = y0; y < y1; y++) {
-      for (let x = 0; x < W; x++) {
-        if (edges.ucharPtr(y, x)[0] > 0) {
-          const xNorm = x / W;
-          const yNorm = y / H;
-          const vel   = magnitude ? Math.min(1, magnitude.floatAt(y, x) / 255) : 0.8;
-          events.push({ xNorm, yNorm, vel });
-          x += 2; // horizontal thinning
-        }
-      }
-    }
-  }
-  return events;
+  const events = filtered.map(p => {
+    let laneIdx = Math.floor(p.y / laneH);
+    if (yUpIsHigher) laneIdx = (lanes - 1) - laneIdx;
+
+    const lane01  = lanes > 1 ? laneIdx / (lanes - 1) : 0;
+    const lane01c = Math.pow(lane01, pitchCurve);
+    const curvedIx = Math.round(lane01c * (lanes - 1));
+
+    const degreeIdx = curvedIx % scaleIntervals.length;
+    const octave    = Math.floor(curvedIx / scaleIntervals.length) + octaveShift;
+    const midi      = scaleRootMidi + scaleIntervals[degreeIdx] + octave * 12;
+
+    const onset    = (p.x / imgW) * spanSeconds;
+    const velocity = velMin + (velMax - velMin) * ((p.mag ?? 0.5) / maxMag);
+
+    return { note: `${["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"][midi % 12]}${Math.floor(midi/12)-1}`, onset, velocity, x: p.x, y: p.y };
+  });
+
+  return events.sort((a, b) => a.onset - b.onset);
 }
 ```
-### 4) Visual → Musical Mapping
+### 4) Scheduling & Playback (Tone.js)
 ```ts
-// toneUtil.ts
-export function mapYToScale(yNorm: number, scale: string[]) {
-  const idx = Math.max(0, Math.min(scale.length - 1,
-      Math.round((1 - yNorm) * (scale.length - 1))));
-  return scale[idx];
-}
+// src/util/toneUtil.ts
+import * as Tone from "tone";
 
-export function mapEvent(
-  e: { xNorm: number; yNorm: number; vel: number },
-  scale: string[],
-  totalBars = 4
-) {
-  const note  = mapYToScale(e.yNorm, scale);
-  const onset = e.xNorm * (totalBars * Tone.Time('1m').toSeconds());
-  const vel   = e.vel;
-  return { note, onset, vel, dur: '8n' as const };
+export async function playEventsAtOnsets(events, style: "Japanese" | "Austrian", { bpm = style === "Japanese" ? 100 : 90, drawDotAt }) {
+  Tone.Transport.stop();
+  Tone.Transport.cancel();
+  Tone.Transport.seconds = 0;
+  Tone.Transport.bpm.value = bpm;
+
+  // initChain(style) → returns 'main' (Sampler/PolySynth + FX)
+  const { main } = await initChain(style);
+
+  const ids = events.map(ev =>
+    Tone.Transport.schedule((time) => {
+      (main as any).triggerAttackRelease(ev.note, ev.durSec ?? 0.3, time, ev.velocity);
+      if (style === "Japanese" && ev.graceMidi !== undefined) {
+        const graceTime = Math.max(Tone.now(), time - 0.05);
+        (main as any).triggerAttackRelease(Tone.Frequency(ev.graceMidi, "midi"), 0.06, graceTime, 0.3);
+      }
+      drawDotAt(ev.x, ev.y);
+    }, ev.onset)
+  );
+
+  Tone.Transport.start("+0.05");
 }
 ```
 Style presets:
@@ -149,25 +188,23 @@ Japanese → koto • ~100 BPM • pentatonic
 
 Austrian → piano • ~90 BPM • harmonic/minor palette
 
-### 5) Scheduling & Playback (Tone.js Transport)
+### 5) Page wiring (where it all connects)
 
 ```ts
-// page.tsx (excerpt)
-Tone.Transport.bpm.value = cfg.bpm;
+// src/app/page.tsx (excerpt)
+const model = await loadKotoModel();
+const tensor = await preprocessImage(file);
+const prediction = model.predict(tensor) as tf.Tensor;
 
-const synth = cfg.instrument === 'koto'
-  ? new Tone.PluckSynth({ dampening: 2400, release: 2 }).toDestination()
-  : new Tone.Sampler({ urls: { C4: 'piano-C4.mp3' } }).toDestination();
-
-mappedEvents.forEach(({ note, onset, vel, dur }) => {
-  Tone.Transport.schedule(time => {
-    synth.triggerAttackRelease(note, dur, time, vel);
-  }, onset);
+const edgePoints = canny(window.cv, imageRef, outputImageRef);
+const events = mapEdgesToEvents(edgePoints, imgW, imgH, {
+  lanes: 10, spanSeconds: 2, scaleRootMidi: 60, scaleIntervals: [0,2,4,7,9], thinCell: 6
 });
 
-await Tone.start();
-Tone.Transport.start('+0.1');
+await playEventsAtOnsets(events, isJapanese ? "Japanese" : "Austrian", { bpm: isJapanese ? 100 : 90, drawDotAt });
 ```
+
+
 ## ✨ Why This Matters
 
 - Cultural architecture features → musical language  

@@ -1,162 +1,170 @@
 Edge-To-Music AI
-<img src="https://upload.wikimedia.org/wikipedia/commons/thumb/2/23/Sinus_3d.gif/120px-Sinus_3d.gif" width="120" align="right">
+<img src="images/logo.png" align="right" alt="Edge-To-Music AI Logo" width="120" height="120">
 
-Edge-To-Music AI turns building geometry into sound.
-Upload architecture → detect structural edges → convert lines into musical events → hear form become melody.
+Edge-To-Music AI turns building geometry into sound — entirely in your browser.
+Upload a photo → detect structural edges → map lines to musical events → listen as form becomes melody.
 
-Where architecture becomes score, and structure becomes rhythm.
+Zero backend — privacy-safe, everything runs locally.
 
-Spatial → musical mapping (edges → notes, angles → timing)
+WebAssembly OpenCV for fast edge detection (Canny + Sobel).
 
-Real-time web inference (TensorFlow.js + WebAssembly OpenCV)
+TensorFlow.js style router (e.g., Japan ⇄ Austria) to pick scale, tempo, and timbre.
 
-Tone.js synthesis engine with transport scheduling
+Tone.js engine with transport scheduling for clean, musical playback.
 
-Deterministic + expressive: lines produce repeatable music, but phrasing adapts
+Deterministic mapping (structure → notes) with expressive humanization options.
 
-Works entirely in the browser — privacy-safe, zero backend
+<p align="center"> <a href="https://hackathon-2025-edge-music.vercel.app/"><b>WEB LINK TO DEMONSTRATION</b></a> </p> <p align="center"> <img src="images/screenshot.png" alt="Edge-To-Music AI Demo Screenshot" width="740"> </p>
 
-“Architecture is frozen music. This project melts it back into sound.”
+“Architecture is frozen music — this project lets it sing.”
 
-<p align="center"> <a href="https://hackathon-2025-edge-music.vercel.app/"><b>Live Demo</b></a> </p> <p align="center"> <img src="https://i.imgur.com/RcSv8ie.jpeg" alt="Demo screenshot" width="700"> </p>
-🎧 What This Does
+What It Does
 
-You upload a building image — temple, museum, tower, street.
-The system:
+You upload a building image (temple, chalet, tower, bridge).
 
-detects edges
+OpenCV.js extracts an edge map that reflects structure and symmetry.
 
-finds angle + frequency relationships
+TF.js classifies style → chooses musical system (scale/tempo/instrument).
 
-assigns pitch + rhythm based on geometry
+Band slicing converts edges to a single, clear melodic lane.
 
-plays an emergent melody from the structure itself
+Tone.js schedules events (onset/pitch/velocity) and renders in real time.
 
-The result feels like architectural mood translated into sound — rigid, flowing, symmetrical, fragmented, etc.
+How It Works
+1) Edge Space (OpenCV.js)
 
-🧠 How It Works
-1. Convert photo to edge space
+We detect high-contrast architectural boundaries with Canny (optionally leveraging Sobel magnitude for dynamics):
 
-OpenCV Canny finds structural lines only:
+// Canvas -> Mat
+const src = cv.imread(imageCanvas)
+cv.cvtColor(src, src, cv.COLOR_RGBA2GRAY)
+cv.GaussianBlur(src, src, new cv.Size(5, 5), 0)
+cv.Canny(src, edgeMat, 50, 150)
 
-const img = cv.imread(canvas)
-cv.cvtColor(img, img, cv.COLOR_RGBA2GRAY)
-cv.GaussianBlur(img, img, new cv.Size(5,5), 0)
-cv.Canny(img, edges, 50, 150)
+// Optional: gradient magnitude for velocity mapping
+cv.Sobel(src, gradX, cv.CV_64F, 1, 0)
+cv.Sobel(src, gradY, cv.CV_64F, 0, 1)
+const magnitude = cv.Mat.zeros(src.rows, src.cols, cv.CV_64F)
+// magnitude = gradX^2 + gradY^2 (elementwise)
+cv.multiply(gradX, gradX, gradX)
+cv.multiply(gradY, gradY, gradY)
+cv.add(gradX, gradY, magnitude)
 
+2) Style Routing (TensorFlow.js)
 
-Output → clean edge map, revealing load-bearing form + symmetry.
+A tiny TF.js classifier (e.g., Japan vs Austria) selects musical palette.
+We load once and keep inputs pre-normalized for instant inference.
 
-2. Extract musical event grid
+const model = await tf.loadLayersModel('/model.json')   // cached in browser
+const input = preprocessImage(file)                      // [1, 224, 224, 3], 0..1
+const logits = model.predict(input) as tf.Tensor
+const [japan, austria] = (await logits.data()) as Float32Array
+input.dispose(); logits.dispose()
 
-Every detected point becomes a candidate note:
+const cfg = (japan >= austria)
+  ? { style: 'japan',  scale: kumoi,          bpm: 100, instrument: 'koto' }
+  : { style: 'austria',scale: harmonicMinor,  bpm:  90, instrument: 'piano' }
 
-edges.forEach((x, y) => events.push({
-  xNorm: x / width,
-  yNorm: y / height,
-  angle: getAngleGradient(x, y, edges)
-}))
+3) Band Slicing → Candidate Notes
 
+We scan the edge image in thin horizontal bands (staff-line analogy), thinning dense pixels to keep the melody monophonic and clear.
 
-We treat the architecture as a score already written.
+const events = []
+for (let band = 0; band < bands; band++) {
+  const y0 = Math.floor((band    / bands) * H)
+  const y1 = Math.floor(((band+1)/ bands) * H)
+  for (let y = y0; y < y1; y++) {
+    for (let x = 0; x < W; x++) {
+      if (edgeMat.ucharPtr(y, x)[0] > 0) {
+        const yNorm = y / H, xNorm = x / W
+        const vel = magnitude?.doubleAt?.(y, x) ?? 1
+        events.push({ xNorm, yNorm, vel })
+        // horizontal thinning: skip ahead to avoid clusters
+        x += 2
+      }
+    }
+  }
+}
 
-3. Map geometry → musical parameters
-Architectural feature	Musical translation
-Vertical line	Sustained tone
-Diagonal beam	Ascending/descending gliss
-Horizontal beams	Stable bass tones
-Dense repetition	Trills / arpeggiation
-Symmetry	Polyphonic unison moments
+4) Visual → Musical Mapping
 
-Pitch from verticality:
+y → pitch (higher in image → higher note)
 
-const pitch = scale[Math.floor((1 - yNorm) * scale.length)]
+x → onset (left→right → earlier→later)
 
+magnitude → velocity (stronger edge → louder)
 
-Time from x-coordinate:
+function mapYToPitch(yNorm: number, scale: string[]) {
+  const idx = Math.max(0, Math.min(scale.length - 1,
+               Math.round((1 - yNorm) * (scale.length - 1))))
+  return scale[idx]
+}
 
-const onset = xNorm * totalDuration
+function mapEvent(e, scale, totalBars = 4) {
+  const note  = mapYToPitch(e.yNorm, scale)
+  const onset = e.xNorm * (totalBars * Tone.Time('1m').toSeconds()) // proportional in a fixed form
+  const vel   = Math.min(1, e.vel / MAX_MAGNITUDE)
+  return { note, onset, vel, dur: '8n' }
+}
 
+5) Scheduling & Playback (Tone.js)
 
-Angle influences articulation + velocity.
+We schedule monophonic, scale-snapped notes on the transport.
+Tempo (BPM) and instrument depend on the style classifier’s decision.
 
-4. Synthesize sound & play transport
+Tone.Transport.bpm.value = cfg.bpm
 
-Tone.js generative playback:
+const synth = cfg.instrument === 'koto'
+  ? new Tone.PluckSynth({ dampening: 2400, release: 2 }).toDestination()
+  : new Tone.Sampler({ urls: { C4: 'piano-C4.mp3' } }).toDestination()
 
-Tone.Transport.schedule(time => {
-  synth.triggerAttackRelease(pitch, dur, time, velocity)
-}, onset)
+mappedEvents.forEach(({ note, onset, vel, dur }) => {
+  Tone.Transport.schedule(time => {
+    synth.triggerAttackRelease(note, dur, time, vel)
+  }, onset)
+})
 
+if (Tone.Transport.state !== 'started') {
+  await Tone.start()
+  Tone.Transport.start('+0.1')
+}
 
-Each building literally sings its shape.
+Musical Systems
+Style	Scale	Instrument	Tempo
+Japan	Kumoi pentatonic	Koto	~100 BPM
+Austria	Harmonic minor	Piano	~90 BPM
 
-🌐 Live Demo
+Principles for clarity:
 
-Try it here:
+Scale-snapping and lane-walk thinning avoid cluster noise.
+
+Monophonic line showcases contour (counterpoint is future work).
+
+Subtle reverb/delay adds space without washing articulation.
+
+Tech Stack
+
+Frontend: Next.js / React / TypeScript
+
+Vision: OpenCV.js (WASM), Canny + Sobel
+
+ML: TensorFlow.js (browser inference)
+
+Audio: Tone.js (Web Audio API)
+
+Hosting: Vercel (static assets + edge delivery)
+
+Demo
+
+Try it live:
+
 https://hackathon-2025-edge-music.vercel.app/
 
-Upload a building → press Play → listen to architecture.
+Best results on buildings with clear edges and distinct geometry (shrines, chalets, brutalism, bridges, glass grids).
 
-Works best on:
+<p align="center"> <a href="https://evilmartians.com/?utm_source=edge-to-music"> <img src="images/sponsor-badge.svg" alt="Sponsored by ..." width="236" height="54"> </a> </p> <!-- Optional Shields (reference-style, easy to swap) -->
+Notes
 
-shrines & temples
+Replace images/logo.png, images/screenshot.png, and images/sponsor-badge.svg with your actual assets.
 
-brutalist geometry
-
-glass grids & arcs
-
-bridges, towers, arches
-
-🧩 Tech Stack
-Layer	Technology
-Edge detection	WebAssembly OpenCV
-ML routing	TensorFlow.js
-Synthesis	Tone.js
-Frontend	Next.js / React
-Runtime	Vercel / Web Audio API
-🧪 Who This Is For
-
-Computational arts researchers
-
-Music technologists
-
-Creative coders (p5 / WebAudio / Max/MSP crowd)
-
-Hackathon AI builders
-
-Architects curious about sonic form
-
-🗺️ Roadmap
-
-🎥 Live camera → real-time “singing architecture”
-
-🎶 Timbre palette selection (organ / koto / pads / brass)
-
-🧮 CLIP aesthetic embeddings → dynamic emotional tuning
-
-🫁 Breath phrasing + rubato humanization
-
-🏛️ 3D mesh → harmonic space mapping (BIM sonification)
-
-🙏 Acknowledgments
-
-TensorFlow.js
-
-OpenCV WASM build
-
-Tone.js
-
-Vercel
-
-Hackathon community & mentors
-
-homage to Goethe / Kandinsky — and every kid who ever looked at a building and wondered if it had music inside it
-
-📎 Footer
-
-If this inspires you, remix it.
-If you expand it, share the sound.
-
-Architecture has always been music —
-we finally just let it sing.
+All code snippets are illustrative and match your pipeline (OpenCV.js → TF.js → Tone.js).

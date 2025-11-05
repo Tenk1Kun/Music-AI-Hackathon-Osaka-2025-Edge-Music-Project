@@ -1,179 +1,204 @@
-<a id="readme-top"></a>
+<br/> <div align="center"> <img src="./logo.png" alt="Edge-To-Music AI Logo" width="180"> </div> <h1 align="center">Edge-To-Music AI</h1> <p align="center"> Transform architecture into sound.<br/> Upload a building → AI guesses cultural style → edges become melody → browser performs it in real time.<br/><br/> 2nd Place • AI + Music Hackathon (Osaka, 2025) <br/><br/> <a href="https://hackathon-2025-edge-music.vercel.app/"><strong>▶ WEB LINK TO DEMONSTRATION</strong></a> &nbsp;·&nbsp; <a href="https://github.com/Tenk1Kun/Music-AI-Hackathon-Osaka-2025-Music-Project">Source Code</a> </p>
+🧠 What this project does
 
-<!-- PROJECT SHIELDS -->
-![Stars](https://img.shields.io/github/stars/Tenk1Kun/Music-AI-Hackathon-Osaka-2025-Music-Project?style=for-the-badge)
-![Issues](https://img.shields.io/github/issues/Tenk1Kun/Music-AI-Hackathon-Osaka-2025-Music-Project?style=for-the-badge)
-![License](https://img.shields.io/github/license/Tenk1Kun/Music-AI-Hackathon-Osaka-2025-Music-Project?style=for-the-badge)
+This system turns architectural form into a clear, monophonic musical line:
 
-<br/>
+Upload an image
 
-<!-- PROJECT LOGO -->
-<div align="center">
-  <img src="./logo.png" alt="Logo" width="180">
-</div>
+Classify Japan vs Austria style (temple vs chalet)
 
-<h1 align="center">Edge-To-Music AI</h1>
+Extract contours using Canny (OpenCV.js / WASM)
 
-<p align="center">
-Transform architecture into sound.<br/>
-Upload a building → AI guesses cultural style → edges become melody → browser performs it in real-time.<br/><br/>
-2nd Place • AI + Music Hackathon (Osaka, 2025)
-<br/><br/>
-<a href="https://hackathon-2025-edge-music.vercel.app/"><strong>▶ Live Demo</strong></a> &nbsp;·&nbsp;
-<a href="https://github.com/Tenk1Kun/Music-AI-Hackathon-Osaka-2025-Music-Project">Source Code</a>
-</p>
+Map image axes → musical dimensions
 
----
+y → pitch
 
-### 🧠 **What this project does**
+x → onset timing
 
-This system turns architectural form into monophonic music:
+edge magnitude → velocity
 
-- **Upload an image**
-- **Classify Japan vs Austria style** (temple vs chalet)
-- **Extract contours** using Canny (OpenCV.js WASM)
-- **Map image axes → musical dimensions**
-  - `y` → **pitch**
-  - `x` → **onset timing**
-  - edge magnitude → **velocity**
-- **Play in-browser** (Tone.js Transport)
-- **Zero backend — privacy-safe, low latency**
+Play in-browser (Tone.js Transport)
 
-> Architecture is *frozen music.*  
-> Here, music melts architecture back into sound.
+Zero backend — privacy-safe, low latency
 
----
+Architecture is frozen music. Here, music melts architecture back into sound.
 
-## 🖼️ **Example Output**
+🖼️ Example Output
+<div align="center"> <img src="./screenshot.png" width="450" alt="Demo screenshot"/> <br/> <i>Temple edges → koto line, 96.4% confidence</i> </div>
+🧩 How It Works — Script Walkthrough
 
-<div align="center">
-<img src="./screenshot.png" width="450"/>
-<br/>
-<i>Temple edges → koto line, 96.4% confidence</i>
-</div>
+Follow the “script” below to understand the full pipeline. Each step mirrors a real module in the repo.
 
----
-
-## 🧩 **How It Works**
-
-### 1. Load + normalize image (TensorFlow.js)
-
-```ts
-## 🧩 How It Works
-
-### 1) Load & Normalize (TensorFlow.js)
-
-```ts
+1) Load & Normalize (TensorFlow.js)
 // loadModel.ts
-const model = await tf.loadLayersModel("/model/model.json")
+import * as tf from '@tensorflow/tfjs';
 
-export async function classify(img: HTMLImageElement | File) {
+export const model = await tf.loadLayersModel('/model/model.json');
+
+export function preprocess(img: HTMLImageElement | ImageData | HTMLCanvasElement) {
+  // Example: resize → toFloat → /255 → expandDims
+  return tf.tidy(() => {
+    const tensor = tf.browser.fromPixels(img as HTMLCanvasElement)
+      .resizeBilinear([224, 224])
+      .toFloat()
+      .div(255);
+    return tensor.expandDims(0); // [1,224,224,3]
+  });
+}
+
+export async function classify(img: HTMLImageElement | ImageData | HTMLCanvasElement) {
   return tf.tidy(() => model.predict(preprocess(img)) as tf.Tensor);
 }
+
+
 We pre-normalize inside the loader so inference is instant during playback — no GC stalls.
 
-2) Edge Extraction (OpenCV.js WASM)
-ts
-Copy code
+2) Edge Extraction (OpenCV.js / WASM)
 // cannyConverter.ts
-cv.cvtColor(src, src, cv.COLOR_RGBA2GRAY);
-cv.GaussianBlur(src, src, new cv.Size(5, 5), 0);
-cv.Canny(src, edges, 50, 150);
-Edges become (x, y, magnitude) points. Magnitude drives note velocity when available.
+// Input: RGBA canvas → Output: edges Mat (CV_8U) and optional gradient magnitude
+export function detectEdges(src: cv.Mat) {
+  const gray = new cv.Mat();
+  const edges = new cv.Mat();
+  const gradX = new cv.Mat(); const gradY = new cv.Mat(); const mag = new cv.Mat();
 
-3) Band Slicing → Musical Lanes
-ts
-Copy code
-// edgeToEvents.ts
-for (let band = 0; band < rows; band++) {
-  const pts  = filterRow(edges, band);
-  const lane = thinHorizontal(pts);
-  events.push(mapToMusic(lane));
+  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+  cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0);
+  cv.Canny(gray, edges, 50, 150);
+
+  // Optional: velocity from gradient magnitude
+  cv.Sobel(gray, gradX, cv.CV_32F, 1, 0);
+  cv.Sobel(gray, gradY, cv.CV_32F, 0, 1);
+  cv.magnitude(gradX, gradY, mag); // CV_32F
+
+  gray.delete(); gradX.delete(); gradY.delete();
+  return { edges, magnitude: mag }; // caller disposes
 }
-We mimic staff lines: thin each band to preserve gesture and avoid density walls.
 
-4) Map Pixels → Pitches & Time
-ts
-Copy code
+
+Edges become (x, y, magnitude) points. Magnitude maps to velocity.
+
+3) Band Slicing → Monophonic Lane
+// edgeToEvents.ts
+// Scan in thin horizontal bands (staff analogy). Thin horizontally to avoid clusters.
+export function edgesToEvents(edges: cv.Mat, magnitude?: cv.Mat, bands = 24) {
+  const W = edges.cols, H = edges.rows;
+  const events: { xNorm: number; yNorm: number; vel: number }[] = [];
+
+  for (let b = 0; b < bands; b++) {
+    const y0 = Math.floor((b    / bands) * H);
+    const y1 = Math.floor(((b+1)/ bands) * H);
+
+    for (let y = y0; y < y1; y++) {
+      for (let x = 0; x < W; x++) {
+        if (edges.ucharPtr(y, x)[0] > 0) {
+          const xNorm = x / W;
+          const yNorm = y / H;
+          const vel   = magnitude ? Math.min(1, magnitude.floatAt(y, x) / 255) : 0.8;
+          events.push({ xNorm, yNorm, vel });
+          x += 2; // horizontal thinning
+        }
+      }
+    }
+  }
+  return events;
+}
+
+
+We mimic staff lines: preserve contour, suppress noise.
+
+4) Visual → Musical Mapping
 // toneUtil.ts
-const pitch = mapYToScale(yNorm, scale); // culture-dependent scale
-const onset = xNorm * measureLength;
-Japanese → koto, ~100 BPM, pentatonic
+export function mapYToScale(yNorm: number, scale: string[]) {
+  const idx = Math.max(0, Math.min(scale.length - 1,
+      Math.round((1 - yNorm) * (scale.length - 1))));
+  return scale[idx];
+}
 
-Austrian → piano, ~90 BPM, European major/minor flavor
+export function mapEvent(e: {xNorm:number;yNorm:number;vel:number}, scale: string[], totalBars = 4) {
+  const note  = mapYToScale(e.yNorm, scale);
+  const onset = e.xNorm * (totalBars * Tone.Time('1m').toSeconds());
+  const vel   = e.vel;
+  return { note, onset, vel, dur: '8n' as const };
+}
 
-5) Schedule Audio (Tone.js Transport)
-ts
-Copy code
-Tone.Transport.schedule(time => {
-  synth.triggerAttackRelease(note, dur, time, vel);
-}, onset);
 
-Tone.Transport.start();
+Japanese → koto • ~100 BPM • pentatonic
+
+Austrian → piano • ~90 BPM • harmonic/minor palette
+
+5) Scheduling & Playback (Tone.js Transport)
+// page.tsx (excerpt)
+Tone.Transport.bpm.value = cfg.bpm;
+
+const synth = cfg.instrument === 'koto'
+  ? new Tone.PluckSynth({ dampening: 2400, release: 2 }).toDestination()
+  : new Tone.Sampler({ urls: { C4: 'piano-C4.mp3' } }).toDestination();
+
+mappedEvents.forEach(({ note, onset, vel, dur }) => {
+  Tone.Transport.schedule(time => {
+    synth.triggerAttackRelease(note, dur, time, vel);
+  }, onset);
+});
+
+await Tone.start();
+Tone.Transport.start('+0.1');
+
+
 All audio runs locally — no server, no streaming.
 
-yaml
-Copy code
+✨ Why This Matters
 
-And here are the other sections you listed, cleaned up and properly formatted:
+Cultural architecture features → musical language
 
-```markdown
-## ✨ Why This Matters
+Edge geometry as gesture
 
-- Cultural architecture features → musical language  
-- Edge geometry as gesture  
-- Real-time browser audio AI, zero backend  
-- Human-centered sonification  
+Real-time browser audio AI, zero backend
+
+Human-centered sonification
 
 Built in 24 hours at an international hackathon — the only high-school competitor among adults.
 
----
+🛠️ Built With
 
-## 🛠️ Built With
+Next.js + TypeScript — UI & routing
 
-- Next.js + TypeScript — UI & routing  
-- TensorFlow.js — style classifier  
-- OpenCV.js (WASM) — edge detection  
-- Tone.js — musical engine & scheduling  
-- Vercel — hosting
+TensorFlow.js — style classifier
 
----
+OpenCV.js (WASM) — edge detection
 
-## 🎵 Sample Pipeline (ASCII)
+Tone.js — musical engine & scheduling
 
+Vercel — hosting
+
+🎵 Pipeline (ASCII)
 Image → Preprocess → Style Classifier → Edge Detector
-└──────────────────────────────┐
-Pitch Map ← y-axis x-axis → Rhythm Grid
+        └──────────────────────────────┐
+Pitch Map ← y-axis              x-axis → Rhythm Grid
 Velocity ← gradient magnitude
-↓
-Tone.Transport
-↓
-Audio Output
+                    ↓
+              Tone.Transport
+                    ↓
+                Audio Output
 
-yaml
-Copy code
+🌍 Who Uses/Studies This
 
----
+Computational creativity researchers
 
-## 🌍 Who Uses/Studies This
+AI-music artists
 
-- Computational creativity researchers  
-- AI-music artists  
-- Architecture & design students  
-- Sonification & HCI explorers  
-- Hackathon & WebAudio community
+Architecture & design students
 
----
+Sonification & HCI explorers
 
-## 🙏 Credits
+Hackathon & WebAudio community
 
-- Core dev: **Koya Takemura**  
-- Vision inspiration: **Leon Kattendick**  
-  <sub>https://github.com/LeonKattendick/</sub>
+🙏 Credits
 
----
+Core dev: Koya Takemura
 
-## 📄 License
+Vision inspiration: Leon Kattendick — https://github.com/LeonKattendick/
+
+📄 License
 
 MIT — free to modify & explore.
 

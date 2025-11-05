@@ -242,15 +242,26 @@ await playEventsAtOnsets(events, isJapanese ? "Japanese" : "Austrian", { bpm: is
 
 ---
 
-## Credits
+**Leon Kattendick**  
+- Implemented: `preprocessImage.ts`, `loadModel.ts`, `cannyConverter.ts`, `page.tsx`  
+- Led: web visuals / UI integration  
+- Also: contributed to `edgeToEvents.ts`  
+- GitHub: [LeonKattendick](https://github.com/LeonKattendick)
 
-- **Leon Kattendick** — implemented the full **frontend & preprocessing pipeline**, including  
-  *`preprocessImage.ts`*, *`loadModel.ts`*, *`cannyConverter.ts`*, and *`page.tsx`* (web visuals and interaction logic).  
-  Also assisted with *`edgeToEvents.ts`* mapping functions.
+**Koya Takemura**  
+- Trained the classification model  
+- Implemented: `toneUtil.ts`  
+- Primary author of: `edgeToEvents.ts` (band mapping, scale logic, scheduling interfaces)  
+- Integration: end-to-end musical mapping & playback
 
-- **Koya Takemura** — trained the **AI classification model**, developed the **musical playback system** (*`toneUtil.ts`*),  
-  and primarily authored the **edge-to-events mapping algorithm** (*`edgeToEvents.ts`*).
+**Jana — last name TBA**  
+- Designed the **SurroundSound** logo
 
+**Steffi**  
+- Created and delivered the project **presentation**
+
+**Mungunshagai Tumurbaatar**  
+- Contributed **ideas** and **website** support
 ---
 
 ## License

@@ -1,170 +1,165 @@
-Edge-To-Music AI
-<img src="images/logo.png" align="right" alt="Edge-To-Music AI Logo" width="120" height="120">
+<a id="readme-top"></a>
 
-Edge-To-Music AI turns building geometry into sound — entirely in your browser.
-Upload a photo → detect structural edges → map lines to musical events → listen as form becomes melody.
+<!-- PROJECT SHIELDS -->
+![Stars](https://img.shields.io/github/stars/Tenk1Kun/Music-AI-Hackathon-Osaka-2025-Music-Project?style=for-the-badge)
+![Issues](https://img.shields.io/github/issues/Tenk1Kun/Music-AI-Hackathon-Osaka-2025-Music-Project?style=for-the-badge)
+![License](https://img.shields.io/github/license/Tenk1Kun/Music-AI-Hackathon-Osaka-2025-Music-Project?style=for-the-badge)
 
-Zero backend — privacy-safe, everything runs locally.
+<br/>
 
-WebAssembly OpenCV for fast edge detection (Canny + Sobel).
+<!-- PROJECT LOGO -->
+<div align="center">
+  <img src="./logo.png" alt="Logo" width="180">
+</div>
 
-TensorFlow.js style router (e.g., Japan ⇄ Austria) to pick scale, tempo, and timbre.
+<h1 align="center">Edge-To-Music AI</h1>
 
-Tone.js engine with transport scheduling for clean, musical playback.
+<p align="center">
+Transform architecture into sound.<br/>
+Upload a building → AI guesses cultural style → edges become melody → browser performs it in real-time.<br/><br/>
+2nd Place • AI + Music Hackathon (Osaka, 2025)
+<br/><br/>
+<a href="https://hackathon-2025-edge-music.vercel.app/"><strong>▶ Live Demo</strong></a> &nbsp;·&nbsp;
+<a href="https://github.com/Tenk1Kun/Music-AI-Hackathon-Osaka-2025-Music-Project">Source Code</a>
+</p>
 
-Deterministic mapping (structure → notes) with expressive humanization options.
+---
 
-<p align="center"> <a href="https://hackathon-2025-edge-music.vercel.app/"><b>WEB LINK TO DEMONSTRATION</b></a> </p> <p align="center"> <img src="images/screenshot.png" alt="Edge-To-Music AI Demo Screenshot" width="740"> </p>
+### 🧠 **What this project does**
 
-“Architecture is frozen music — this project lets it sing.”
+This system turns architectural form into monophonic music:
 
-What It Does
+- **Upload an image**
+- **Classify Japan vs Austria style** (temple vs chalet)
+- **Extract contours** using Canny (OpenCV.js WASM)
+- **Map image axes → musical dimensions**
+  - `y` → **pitch**
+  - `x` → **onset timing**
+  - edge magnitude → **velocity**
+- **Play in-browser** (Tone.js Transport)
+- **Zero backend — privacy-safe, low latency**
 
-You upload a building image (temple, chalet, tower, bridge).
+> Architecture is *frozen music.*  
+> Here, music melts architecture back into sound.
 
-OpenCV.js extracts an edge map that reflects structure and symmetry.
+---
 
-TF.js classifies style → chooses musical system (scale/tempo/instrument).
+## 🖼️ **Example Output**
 
-Band slicing converts edges to a single, clear melodic lane.
+<div align="center">
+<img src="./screenshotmusicai.png" width="450"/>
+<br/>
+<i>Temple edges → koto line, 96.4% confidence</i>
+</div>
 
-Tone.js schedules events (onset/pitch/velocity) and renders in real time.
+---
 
-How It Works
-1) Edge Space (OpenCV.js)
+## 🧩 **How It Works**
 
-We detect high-contrast architectural boundaries with Canny (optionally leveraging Sobel magnitude for dynamics):
+### 1. Load + normalize image (TensorFlow.js)
 
-// Canvas -> Mat
-const src = cv.imread(imageCanvas)
+```ts
+// loadModel.ts
+const model = await tf.loadLayersModel("/model/model.json")
+export async function classify(img) {
+  return tf.tidy(() => model.predict(preprocess(img)))
+}
+We pre-normalize inside the loader so inference is instant during playback — no GC stalls.
+
+2. Edge extraction (OpenCV.js WASM)
+ts
+Copy code
+// cannyConverter.ts
 cv.cvtColor(src, src, cv.COLOR_RGBA2GRAY)
-cv.GaussianBlur(src, src, new cv.Size(5, 5), 0)
-cv.Canny(src, edgeMat, 50, 150)
+cv.GaussianBlur(src, src, new cv.Size(5,5), 0)
+cv.Canny(src, edges, 50, 150)
+Edges become (x, y, magnitude) points.
+Magnitude drives note velocity when available.
 
-// Optional: gradient magnitude for velocity mapping
-cv.Sobel(src, gradX, cv.CV_64F, 1, 0)
-cv.Sobel(src, gradY, cv.CV_64F, 0, 1)
-const magnitude = cv.Mat.zeros(src.rows, src.cols, cv.CV_64F)
-// magnitude = gradX^2 + gradY^2 (elementwise)
-cv.multiply(gradX, gradX, gradX)
-cv.multiply(gradY, gradY, gradY)
-cv.add(gradX, gradY, magnitude)
-
-2) Style Routing (TensorFlow.js)
-
-A tiny TF.js classifier (e.g., Japan vs Austria) selects musical palette.
-We load once and keep inputs pre-normalized for instant inference.
-
-const model = await tf.loadLayersModel('/model.json')   // cached in browser
-const input = preprocessImage(file)                      // [1, 224, 224, 3], 0..1
-const logits = model.predict(input) as tf.Tensor
-const [japan, austria] = (await logits.data()) as Float32Array
-input.dispose(); logits.dispose()
-
-const cfg = (japan >= austria)
-  ? { style: 'japan',  scale: kumoi,          bpm: 100, instrument: 'koto' }
-  : { style: 'austria',scale: harmonicMinor,  bpm:  90, instrument: 'piano' }
-
-3) Band Slicing → Candidate Notes
-
-We scan the edge image in thin horizontal bands (staff-line analogy), thinning dense pixels to keep the melody monophonic and clear.
-
-const events = []
-for (let band = 0; band < bands; band++) {
-  const y0 = Math.floor((band    / bands) * H)
-  const y1 = Math.floor(((band+1)/ bands) * H)
-  for (let y = y0; y < y1; y++) {
-    for (let x = 0; x < W; x++) {
-      if (edgeMat.ucharPtr(y, x)[0] > 0) {
-        const yNorm = y / H, xNorm = x / W
-        const vel = magnitude?.doubleAt?.(y, x) ?? 1
-        events.push({ xNorm, yNorm, vel })
-        // horizontal thinning: skip ahead to avoid clusters
-        x += 2
-      }
-    }
-  }
+3. Band slicing → musical lanes
+ts
+Copy code
+// edgeToEvents.ts
+for (let band = 0; band < rows; band++) {
+  const pts = filterRow(edges, band)
+  const lane = thinHorizontal(pts)
+  events.push(mapToMusic(lane))
 }
+We mimic staff lines: thin each band to preserve gesture, avoid density walls.
 
-4) Visual → Musical Mapping
+4. Map pixels → pitches & time
+ts
+Copy code
+// toneUtil.ts
+const pitch = mapYToScale(yNorm, scale)   // culture-dependent scale
+const onset = xNorm * measureLength
+Japanese → koto, ~100BPM, pentatonic
 
-y → pitch (higher in image → higher note)
+Austrian → piano, ~90BPM, European major/minor flavor
 
-x → onset (left→right → earlier→later)
+5. Schedule audio (Tone.js Transport)
+ts
+Copy code
+Tone.Transport.schedule(time => {
+  synth.triggerAttackRelease(note, dur, time, vel)
+}, onset)
+Tone.Transport.start()
+All audio runs locally — no server, no streaming.
 
-magnitude → velocity (stronger edge → louder)
+✨ Why This Matters
+This project explores:
 
-function mapYToPitch(yNorm: number, scale: string[]) {
-  const idx = Math.max(0, Math.min(scale.length - 1,
-               Math.round((1 - yNorm) * (scale.length - 1))))
-  return scale[idx]
-}
+Cultural architecture features → musical language
 
-function mapEvent(e, scale, totalBars = 4) {
-  const note  = mapYToPitch(e.yNorm, scale)
-  const onset = e.xNorm * (totalBars * Tone.Time('1m').toSeconds()) // proportional in a fixed form
-  const vel   = Math.min(1, e.vel / MAX_MAGNITUDE)
-  return { note, onset, vel, dur: '8n' }
-}
+Edge geometry as gesture
 
-5) Scheduling & Playback (Tone.js)
+Real-time browser audio AI, zero backend
 
-We schedule monophonic, scale-snapped notes on the transport.
-Tempo (BPM) and instrument depend on the style classifier’s decision.
+Human-centered sonification
 
-Tone.Transport.bpm.value = cfg.bpm
+It was built in 24 hours at an international hackathon,
+as the only high-school competitor in a field of adults.
 
-const synth = cfg.instrument === 'koto'
-  ? new Tone.PluckSynth({ dampening: 2400, release: 2 }).toDestination()
-  : new Tone.Sampler({ urls: { C4: 'piano-C4.mp3' } }).toDestination()
+🛠️ Built With
+Next.js + TypeScript — UI + routing
 
-mappedEvents.forEach(({ note, onset, vel, dur }) => {
-  Tone.Transport.schedule(time => {
-    synth.triggerAttackRelease(note, dur, time, vel)
-  }, onset)
-})
+TensorFlow.js — style classifier
 
-if (Tone.Transport.state !== 'started') {
-  await Tone.start()
-  Tone.Transport.start('+0.1')
-}
+OpenCV.js (WASM) — edge detection
 
-Musical Systems
-Style	Scale	Instrument	Tempo
-Japan	Kumoi pentatonic	Koto	~100 BPM
-Austria	Harmonic minor	Piano	~90 BPM
+Tone.js — musical engine + scheduling
 
-Principles for clarity:
+Vercel — hosting
 
-Scale-snapping and lane-walk thinning avoid cluster noise.
+🎵 Sample Pipeline (ASCII)
+mathematica
+Copy code
+Image → Preprocess → Style Classifier → Edge Detector
+        └──────────────────────────────┐
+Pitch Map ← y-axis              x-axis → Rhythm Grid
+Velocity ← gradient magnitude
+                    ↓
+              Tone.Transport
+                    ↓
+                Audio Output
+🌍 Who Uses/Studies This
+Computational creativity researchers
 
-Monophonic line showcases contour (counterpoint is future work).
+AI-music artists
 
-Subtle reverb/delay adds space without washing articulation.
+Architecture & design students
 
-Tech Stack
+Sonification & HCI explorers
 
-Frontend: Next.js / React / TypeScript
+Hackathon + WebAudio community
 
-Vision: OpenCV.js (WASM), Canny + Sobel
+🙏 Credits
+Core dev: Koya Takemura
 
-ML: TensorFlow.js (browser inference)
+Vision inspiration: Leon Kattendick
+<sub>https://github.com/LeonKattendick/</sub>
 
-Audio: Tone.js (Web Audio API)
+📄 License
+MIT — free to modify & explore.
 
-Hosting: Vercel (static assets + edge delivery)
-
-Demo
-
-Try it live:
-
-https://hackathon-2025-edge-music.vercel.app/
-
-Best results on buildings with clear edges and distinct geometry (shrines, chalets, brutalism, bridges, glass grids).
-
-<p align="center"> <a href="https://evilmartians.com/?utm_source=edge-to-music"> <img src="images/sponsor-badge.svg" alt="Sponsored by ..." width="236" height="54"> </a> </p> <!-- Optional Shields (reference-style, easy to swap) -->
-Notes
-
-Replace images/logo.png, images/screenshot.png, and images/sponsor-badge.svg with your actual assets.
-
-All code snippets are illustrative and match your pipeline (OpenCV.js → TF.js → Tone.js).
+<p align="right">(<a href="#readme-top">back to top</a>)</p> ```
